@@ -66,12 +66,15 @@ class Sonia(object):
 
 	compute_seq_energy(seq_features = None, seq = None)
 		Computes the energy, as determined by the model, of a sequence.
+                FAM: The energy of a sequence is the output of the model applied to a featurized version of the sequence. The output of the model is the negative of the log of Q.
 
 	compute_energy(seqs_features)
 		Computes the energies of a list of seq_features according to the model.
+                FAM: The energy is the output of the model applied to a featurized description of the sequence.
 
 	compute_marginals(self, features = None, seq_model_features = None, seqs = None, use_flat_distribution = False)
 		Computes the marginals of features over a set of sequences.
+                FAM: The marginal for a given feature f is the normalized sum of the Q for all of the sequences containing that f.
 
 	infer_selection(self, epochs = 20, batch_size=5000, initialize = True, seed = None)
 		Infers model parameters (energies for each feature).
@@ -290,6 +293,8 @@ class Sonia(object):
 			Z = 0.
 			if not use_flat_distribution:
 				energies = self.compute_energy(seq_model_features)
+                                # FAM: Here we see that the Qs are the exponential of
+                                # the negative model predictions.
 				Qs= np.exp(-energies)
 				for seq_features,Q in zip(seq_compute_features,Qs):
 					marginals[seq_features] += Q
@@ -332,13 +337,20 @@ class Sonia(object):
 			np.random.seed(seed = seed)
 		if initialize:
 			# prepare data
+                        # FAM: The X in the model is collection of data sequences,
+                        # followed by the generated sequences. Each is represented by
+                        # their corresponding features.
 			self.X = np.array(self.data_seq_features+self.gen_seq_features)
+                        # FAM: The Y to be fit assign 0 to featurized the data sequences
+                        # and 1 to the featurized generated sequences.
 			self.Y = np.concatenate([np.zeros(len(self.data_seq_features)), np.ones(len(self.gen_seq_features))])
 
 			shuffle = np.random.permutation(len(self.X)) # shuffle
 			self.X=self.X[shuffle]
 			self.Y=self.Y[shuffle]
 
+                # FAM the L1 recorded here is the L1 between the per-feature marginals of
+                # the model and the per-feature marginals of the data.
 		computeL1_dist = computeL1(self)
 		callbacks = [computeL1_dist]
 		self.learning_history = self.model.fit(self._encode_data(self.X), self.Y, epochs=epochs, batch_size=batch_size,
@@ -441,7 +453,6 @@ class Sonia(object):
 
 		if (len(add_gen_seqs + add_features + remove_features) > 0 or auto_update_seq_features) and len(self.features)>0:
 			self.gen_seq_features = [self.find_seq_features(seq) for seq in self.gen_seqs]
-
 
 		if (len(add_gen_seqs + add_features + remove_features) > 0 or auto_update_marginals) and len(self.features)>0:
 			self.gen_marginals = self.compute_marginals(seq_model_features = self.gen_seq_features, use_flat_distribution = True)
@@ -685,16 +696,28 @@ def loss(y_true, y_pred):
 	gamma=1e-1
 	data= K.sum((-y_pred)*(1.-y_true))/K.sum(1.-y_true)
 	gen= K.log(K.sum(K.exp(-y_pred)*y_true))-K.log(K.sum(y_true))
+        # FAM The regularization term tries to make exp(gen), namely Q for the generated
+        # sequences, close to 1.
 	reg= K.exp(gen)-1.
 
 	return gen-data+gamma*reg*reg
 
 
+# FAM This must be the negative log likelihood (it will get minimized modulo the
+# regularization above.
+# The way to approach this is to consider (8) of the writeup, and substitute in (7) but
+# with a normalizing term Z. When we expand, we get an average over sequences of
+# log Pgen + sum lambda_f - log Z. The first term can be ignored for optimization.
+# The second term is the "data" term. The third term is the "gen" term.
 def likelihood(y_true, y_pred):
 
+    # FAM Recall that y=0 means in the data and y=1 means in the generated sequences.
+    # This term is simply the average of negative of y_pred for all of the
+    # data sequences, which is the sum of the lambdas.
 	data= K.sum((-y_pred)*(1.-y_true))/K.sum(1.-y_true)
+    # FAM Here we are taking the log of the average of exp of negative y_pred over all
+    # the generated sequences.
 	gen= K.log(K.sum(K.exp(-y_pred)*y_true))-K.log(K.sum(y_true))
-
 	return gen-data
 
 class computeL1(keras.callbacks.Callback):
